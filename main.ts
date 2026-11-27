@@ -1,74 +1,81 @@
-// "The World on Thursday" — entry program for make.fun's
+// "The World on Thursday" — the entry program for make.fun's
 // "Sum up 26 November's world news in one image" bounty ($100 in USDC).
 //
-// The entry is one picture: a broadsheet front page that sums up the world
-// news of Thursday 26 November 2026. The composed image ships in this
-// repository as entry.png (see frontpage.html for how it was laid out, and
-// assets/ for the hero illustration of a drone over Gulf waters as a
-// tanker burns on the horizon). The image itself was composed by
-// rendering frontpage.html at 1024 by 1024 in headless Chrome; see
-// build-image.mjs. This program writes that image, byte for
-// byte, to /output/entry.png, after checking it against the bounty's
-// limits: a whole PNG of at most 1 MiB and at most 1024 by 1024 pixels.
-// It uses no network and no clock, so every run writes the same bytes.
+// What this entry is: one picture, a broadsheet front page that sums up
+// the world news of Thursday 26 November 2026. The picture is
+// frontpage.html rendered at 1024 by 1024 in headless Chrome (see
+// build-image.mjs), saved in this repository as entry.png, with a hero
+// illustration of a drone over Gulf waters while a tanker burns on the
+// horizon. This program does nothing creative: it checks that picture
+// against the bounty's limits — a PNG, at most 1024 by 1024 pixels, at
+// most 1 MiB — and copies it, byte for byte, to /output/entry.png.
+// It reads no clock and touches no network, so repeated runs write
+// identical bytes.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MAX_BYTES = 1024 * 1024; // 1 MiB
-const MAX_SIDE = 1024; // pixels
+// The bounty's limits for the delivered image.
+const MAX_BYTES = 1024 * 1024;
+const MAX_SIDE_PX = 1024;
+
+// Every PNG begins with these eight bytes.
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 const here = dirname(fileURLToPath(import.meta.url));
-const sourcePath = join(here, "entry.png");
-const outputDir = process.env.MAKEFUN_OUTPUT ?? "/output";
-const outputPath = join(outputDir, "entry.png");
+const source = join(here, "entry.png");
+const outDir = process.env.MAKEFUN_OUTPUT ?? "/output";
+const outPath = join(outDir, "entry.png");
 
-/** Read a big-endian unsigned 32-bit integer from a byte buffer. */
-function u32be(bytes: Uint8Array, offset: number): number {
-  return (
-    bytes[offset] * 2 ** 24 +
-    bytes[offset + 1] * 2 ** 16 +
-    bytes[offset + 2] * 2 ** 8 +
-    bytes[offset + 3]
-  );
+/** True when the buffer opens with the PNG magic bytes. */
+function isPng(bytes: Uint8Array): boolean {
+  return PNG_MAGIC.every((magic, i) => bytes[i] === magic);
 }
 
-/** The 8-byte signature every PNG file starts with. */
-function hasPngSignature(bytes: Uint8Array): boolean {
-  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  return signature.every((value, index) => bytes[index] === value);
+/**
+ * Width and height of a PNG, read from its IHDR chunk with a DataView.
+ * The IHDR chunk starts right after the 8-byte signature: 4 bytes of
+ * length, 4 bytes spelling IHDR, then width and height as big-endian
+ * 32-bit integers at offsets 16 and 20. Reading them as unsigned
+ * 32-bit values keeps the check exact for any image under the limit.
+ */
+function pngDimensions(bytes: Uint8Array): { width: number; height: number } {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
 }
 
-/** Width and height from the PNG IHDR chunk, which follows the signature. */
-function pngSize(bytes: Uint8Array): { width: number; height: number } {
-  return { width: u32be(bytes, 16), height: u32be(bytes, 20) };
-}
-
-function main(): void {
-  if (!existsSync(sourcePath)) {
-    throw new Error(`entry image is missing from the repository: ${sourcePath}`);
-  }
-  const bytes = readFileSync(sourcePath);
-  if (!hasPngSignature(bytes)) {
+/** Refuse anything that is not the single image this entry promises. */
+function checkImage(bytes: Uint8Array): { width: number; height: number } {
+  if (!isPng(bytes)) {
     throw new Error("entry.png is not a PNG file");
   }
-  const { width, height } = pngSize(bytes);
-  if (width > MAX_SIDE || height > MAX_SIDE) {
-    throw new Error(`entry.png is ${width}x${height}, over the ${MAX_SIDE}px limit`);
+  const { width, height } = pngDimensions(bytes);
+  if (width > MAX_SIDE_PX || height > MAX_SIDE_PX) {
+    throw new Error(`entry.png is ${width}x${height}, over the ${MAX_SIDE_PX}px limit`);
   }
   if (bytes.length > MAX_BYTES) {
     throw new Error(`entry.png is ${bytes.length} bytes, over the 1 MiB limit`);
   }
+  return { width, height };
+}
 
-  mkdirSync(outputDir, { recursive: true });
-  copyFileSync(sourcePath, outputPath);
+function main(): void {
+  if (!existsSync(source)) {
+    throw new Error(`entry image is missing from the repository: ${source}`);
+  }
+  const bytes = readFileSync(source);
+  const { width, height } = checkImage(bytes);
 
-  const written = statSync(outputPath).size;
+  mkdirSync(outDir, { recursive: true });
+  copyFileSync(source, outPath);
+
+  // The copy must be exact: same byte count as the checked original.
+  const written = statSync(outPath).size;
   if (written !== bytes.length) {
     throw new Error(`wrote ${written} bytes, expected ${bytes.length}`);
   }
-  console.log(`entry.png: ${width}x${height}, ${written} bytes -> ${outputPath}`);
+  console.log(`entry.png: ${width}x${height}, ${written} bytes -> ${outPath}`);
 }
 
 main();
